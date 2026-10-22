@@ -54,6 +54,8 @@
 
 ### Functional
 
+- [FileStream](../../../core/libs/prx/libc/include/FileStream.hpp) direct guest macro access, concurrent close/reopen and unlocked functions require caller synchronization. Whole-operation host locking follows FreeBSD 11.4 [fgetws](https://github.com/freebsd/freebsd-src/blob/releng/11.4/lib/libc/stdio/fgetws.c), [vfscanf](https://github.com/freebsd/freebsd-src/blob/releng/11.4/lib/libc/stdio/vfscanf.c) and [puts](https://github.com/freebsd/freebsd-src/blob/releng/11.4/lib/libc/stdio/puts.c), not PS5 measurements. Existing encoding and locale restrictions remain. Older ThreadSanitizer runtimes need instrumentation of the actual `flockfile`/`funlockfile` locks to observe their synchronization.
+
 - [_FSinh and _FCosh](../../../core/libs/prx/libc/src/Math.cpp) (libc) finite results are not verified bit for bit against the console: the scaled product uses the host's binary64 hyperbolic function before rounding to binary32, rather than the float rational and `_FExp` sequence in PRAGMATA's bundled `libc.prx`. NaN preference and payloads, signed zeros, infinite operands and the range-error thresholds follow that binary's instructions; the system `libSceLibcInternal` implementation and nondefault flush-to-zero modes are unverified.
 
 - [sscanf_s and vsscanf_s](../../../core/libs/prx/libc/src/Formatting.cpp) (libc) return `EOF` when a reached conversion has a null destination, stopping before further assignments, following C11 K.3.5.3.7 and K.3.5.3.14. Earlier assignments are retained. The constraint handler is not invoked, and console behaviour is unverified.

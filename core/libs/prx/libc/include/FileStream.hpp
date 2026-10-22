@@ -34,6 +34,30 @@ extern "C" int _IO_switch_to_get_mode(std::FILE* stream);
 #endif
 extern "C" int DuplicateHostDescriptor_nid_no_patch(int descriptor);
 
+class NativeStreamLock {
+    std::FILE* stream;
+
+public:
+    explicit NativeStreamLock(std::FILE* value) : stream(value) {
+        if (!stream) return;
+#ifdef _WIN32
+        ::_lock_file(stream);
+#else
+        ::flockfile(stream);
+#endif
+    }
+    ~NativeStreamLock() {
+        if (!stream) return;
+#ifdef _WIN32
+        ::_unlock_file(stream);
+#else
+        ::funlockfile(stream);
+#endif
+    }
+    NativeStreamLock(const NativeStreamLock&) = delete;
+    NativeStreamLock& operator=(const NativeStreamLock&) = delete;
+};
+
 struct GuestFilePrefix {
     unsigned char* position = nullptr;
     std::int32_t readRemaining = 0;
@@ -214,10 +238,14 @@ public:
     }
     void SyncStatus() {
         if (!_handle) return;
-        _guest.readRemaining = 0;
-        _guest.writeRemaining = 0;
-        _guest.flags = static_cast<std::int16_t>((_guest.flags & ~0x60) |
-            (std::feof(GetHandle()) ? 0x20 : 0) | (std::ferror(GetHandle()) || guestError ? 0x40 : 0));
+        const NativeStreamLock lock(_handle);
+        SyncUnlockedStatus();
+    }
+
+    std::int16_t Status() {
+        const NativeStreamLock lock(_handle);
+        SyncUnlockedStatus();
+        return _guest.flags;
     }
 
     void SyncUnlockedStatus() {
@@ -236,17 +264,8 @@ public:
     }
 
     bool SwitchToReading() {
-#ifdef _WIN32
-        ::_lock_file(GetHandle());
-        const bool switched = SwitchToReadingUnlocked();
-        ::_unlock_file(GetHandle());
-        return switched;
-#else
-        ::flockfile(GetHandle());
-        const bool switched = SwitchToReadingUnlocked();
-        ::funlockfile(GetHandle());
-        return switched;
-#endif
+        const NativeStreamLock lock(GetHandle());
+        return SwitchToReadingUnlocked();
     }
 
     bool SwitchToReadingUnlocked() {
@@ -277,15 +296,25 @@ public:
     }
 
     void SetError() {
+        const NativeStreamLock lock(_handle);
         guestError = true;
-        SyncStatus();
+        SyncUnlockedStatus();
     }
 
     void ClearError() {
+        const NativeStreamLock lock(_handle);
+        ClearUnlockedError();
+    }
+
+    void ClearUnlockedError() {
         if (!_handle) return;
+#ifdef _WIN32
         std::clearerr(GetHandle());
+#else
+        ::clearerr_unlocked(GetHandle());
+#endif
         guestError = false;
-        SyncStatus();
+        SyncUnlockedStatus();
     }
 
     int Close() {

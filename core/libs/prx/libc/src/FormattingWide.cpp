@@ -340,9 +340,13 @@ int APS5_VABI vfwprintf_nid_postfix(FileStream* stream, const char16_t* format, 
     if (!stream->IsOpen()) { errno = 9; return -1; }
     int result = -1;
     try {
+        auto* native = GetNativeStream(stream);
+        const NativeStreamLock lock(native);
         const std::u16string text = FormatWide(format, args);
         const std::string bytes = ToUtf8(text);
-        if (std::fwrite(bytes.data(), 1, bytes.size(), GetNativeStream(stream)) == bytes.size()) result = static_cast<int>(text.size());
+        if (std::fwrite(bytes.data(), 1, bytes.size(), native) == bytes.size()) result = static_cast<int>(text.size());
+        stream->SyncStatus();
+        return result;
     } catch (const std::exception&) {
         errno = 22;
     }
@@ -366,8 +370,10 @@ int APS5_VABI fputwc_nid_postfix(char16_t value, FileStream* stream) {
     try {
         const std::string bytes = ToUtf8(std::u16string(1, value));
         auto* native = GetNativeStream(stream);
-        if (std::fwrite(bytes.data(), 1, bytes.size(), native) != bytes.size()) throw std::runtime_error("stream write failed");
+        const NativeStreamLock lock(native);
+        const bool written = std::fwrite(bytes.data(), 1, bytes.size(), native) == bytes.size();
         stream->SyncStatus();
+        if (!written) throw std::runtime_error("stream write failed");
         return value;
     } catch (const std::exception&) {
         errno = 22;
@@ -381,8 +387,10 @@ int APS5_VABI fputws_nid_postfix(const char16_t* str, FileStream* stream) {
         const std::u16string text(str);
         const std::string bytes = ToUtf8(text);
         auto* native = GetNativeStream(stream);
-        if (std::fwrite(bytes.data(), 1, bytes.size(), native) != bytes.size()) throw std::runtime_error("stream write failed");
+        const NativeStreamLock lock(native);
+        const bool written = std::fwrite(bytes.data(), 1, bytes.size(), native) == bytes.size();
         stream->SyncStatus();
+        if (!written) throw std::runtime_error("stream write failed");
         return static_cast<int>(text.size());
     } catch (const std::exception&) {
         errno = 22;
@@ -404,6 +412,8 @@ char16_t* APS5_VABI fgetws_nid_postfix(char16_t* buffer, int size, FileStream* s
         errno = 22;
         return nullptr;
     }
+    if (!stream->IsOpen()) { errno = 9; return nullptr; }
+    const NativeStreamLock lock(GetStreamHandle(stream));
     int count = 0;
     while (count < size - 1) {
         const std::int32_t character = fgetwc_nid_postfix(stream);

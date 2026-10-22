@@ -483,6 +483,7 @@ FileStream* APS5_VABI _ZSt7_FiopenPKcNSt5_IosbIiE9_OpenmodeEi_nid_postfix(const 
 size_t APS5_VABI fread_nid_postfix(void* buffer, size_t size, size_t count, FileStream* stream) {
     if (stream && !stream->IsOpen()) { errno = 9; return 0; }
     auto* handle = GetStreamHandle(stream);
+    const NativeStreamLock lock(handle);
     if (size == 0 || count == 0) return 0;
     if (!buffer) throw std::runtime_error("fread: null buffer");
     if (count > std::numeric_limits<std::size_t>::max() / size) throw std::overflow_error("fread: buffer size overflow");
@@ -505,6 +506,7 @@ size_t APS5_VABI fread_nid_postfix(void* buffer, size_t size, size_t count, File
 size_t APS5_VABI fwrite_nid_postfix(const void* buffer, size_t size, size_t count, FileStream* stream) {
     if (stream && !stream->IsOpen()) { errno = 9; return 0; }
     auto* handle = GetNativeStream(stream);
+    const NativeStreamLock lock(handle);
     if (size == 0 || count == 0) return 0;
     if (!buffer) throw std::runtime_error("fwrite: null buffer");
     if (count > std::numeric_limits<std::size_t>::max() / size) throw std::overflow_error("fwrite: buffer size overflow");
@@ -519,6 +521,7 @@ size_t APS5_VABI fwrite_nid_postfix(const void* buffer, size_t size, size_t coun
 int APS5_VABI fseeko_nid_postfix(FileStream* stream, std::int64_t offset, int origin) {
     if (stream && !stream->IsOpen()) { errno = 9; return -1; }
     if (origin != SEEK_SET && origin != SEEK_CUR && origin != SEEK_END) { errno = 22; return -1; }
+    const NativeStreamLock lock(GetNativeStream(stream));
 #ifdef _WIN32
     auto* native = GetNativeStream(stream);
     if (IsPipeStream(native)) { errno = 29; return -1; }
@@ -567,6 +570,8 @@ int APS5_VABI fsetpos_nid_postfix(FileStream* stream, const std::int64_t* positi
 }
 
 void APS5_VABI rewind_nid_postfix(FileStream* stream) {
+    if (stream && !stream->IsOpen()) { errno = 9; return; }
+    const NativeStreamLock lock(GetStreamHandle(stream));
     const int saved = errno;
     if (fseeko_nid_postfix(stream, 0, SEEK_SET) == 0) errno = saved;
     stream->ClearError();
@@ -575,6 +580,7 @@ void APS5_VABI rewind_nid_postfix(FileStream* stream) {
 int APS5_VABI fputs_nid_postfix(const char* str, FileStream* stream) {
     if (!str) throw std::runtime_error("fputs: null string");
     if (stream && !stream->IsOpen()) { errno = 9; return -1; }
+    const NativeStreamLock lock(GetNativeStream(stream));
     const int result = std::fputs(str, GetNativeStream(stream));
     stream->SyncStatus();
     return result;
@@ -583,6 +589,7 @@ int APS5_VABI fputs_nid_postfix(const char* str, FileStream* stream) {
 int APS5_VABI fflush_nid_postfix(FileStream* stream) {
     if (stream && !stream->IsOpen()) { errno = 9; return -1; }
     std::FILE* native = stream ? GetStreamHandle(stream) : nullptr;
+    const NativeStreamLock lock(native);
     if (stream && (stream->IsRandomDevice() || stream->IsDirectory())) return 0;
 #ifdef __linux__
     if (native && !__fwriting(native)) return 0;
