@@ -1,4 +1,5 @@
 #include "prx/libkernel/File/include/FileFlags.hpp"
+#include "prx/libkernel/File/include/TransferLimits.hpp"
 #include "prx/libkernel/File/include/NativeStat.hpp"
 #include "prx/libc/include/General.hpp"
 #include "prx/libc/include/FilesystemError.hpp"
@@ -56,9 +57,7 @@ static std::int64_t NativeLseek(int fd, std::int64_t offset, int whence) {
     return -1;
 }
 static int NativeRead(int fd, void* buf, std::size_t n) {
-    if (n > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
-        throw std::runtime_error("sceKernelRead: nbytes exceeds platform limit");
-    }
+    n = File::NativeIoChunk(n);
     if (File::IsDirectoryDescriptor(fd)) {
         errno = EISDIR;
         return -1;
@@ -69,9 +68,7 @@ static int NativeRead(int fd, void* buf, std::size_t n) {
     return result;
 }
 static int NativeWrite(int fd, const void* buf, std::size_t n) {
-    if (n > static_cast<std::size_t>(std::numeric_limits<unsigned int>::max())) {
-        throw std::runtime_error("sceKernelWrite: nbytes exceeds platform limit");
-    }
+    n = File::NativeIoChunk(n);
     const auto positioned = File::LockPositionedTransfer(fd);
     const auto shared = File::WriteSharedMemory_nid_no_patch(fd, buf, n);
     if (shared != -2) return static_cast<int>(shared);
@@ -318,6 +315,7 @@ int APS5_VABI sceKernelClose(int d) {
 }
 
 std::int64_t APS5_VABI sceKernelRead(int d, void* buf, std::size_t nbytes) {
+    if (File::ExceedsTransferLimit(nbytes)) return SCE_KERNEL_ERROR_EINVAL;
     if (GuestSockets::IsOpen(d)) {
         const auto n = GuestSockets::Read(d, buf, nbytes);
         return n < 0 ? SceKernelError(*__error_nid_postfix()) : n;
@@ -337,6 +335,7 @@ std::int64_t APS5_VABI sceKernelRead(int d, void* buf, std::size_t nbytes) {
 }
 
 std::int64_t APS5_VABI sceKernelWrite(int d, const void* buf, std::size_t nbytes) {
+    if (File::ExceedsTransferLimit(nbytes)) return SCE_KERNEL_ERROR_EINVAL;
     if (GuestSockets::IsOpen(d)) {
         const auto n = GuestSockets::Write(d, buf, nbytes);
         return n < 0 ? SceKernelError(*__error_nid_postfix()) : n;

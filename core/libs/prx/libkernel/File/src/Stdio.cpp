@@ -11,6 +11,7 @@
 #include "prx/libkernel/File/include/File.hpp"
 #include "prx/libkernel/File/include/SharedMemory.hpp"
 #include "prx/libkernel/File/include/FileFlags.hpp"
+#include "prx/libkernel/File/include/TransferLimits.hpp"
 #include "prx/libkernel/File/include/NativeStat.hpp"
 #include "prx/libkernel/File/include/KernelStatfs.hpp"
 #include "prx/libkernel/File/include/DirectoryDescriptor.hpp"
@@ -242,9 +243,7 @@ void File::SharePositionedTransfer(int from, int to) {
     g_positionedLocks[to] = source;
 }
 static std::int64_t NativePositionedTransfer(int descriptor, void* buf, std::size_t nbytes, std::int64_t offset, bool write) {
-    if (nbytes > static_cast<std::size_t>(std::numeric_limits<DWORD>::max())) {
-        throw std::runtime_error("NativePositioned: nbytes exceeds platform limit");
-    }
+    nbytes = File::NativeIoChunk(nbytes);
     if (write) {
         const auto result = File::PwriteSharedMemory_nid_no_patch(descriptor, buf, nbytes, offset);
         if (result != -2) return result;
@@ -487,7 +486,7 @@ static int PosixFailure(int error) {
 }
 
 static bool ExceedsTransferLimit(std::uint64_t bytes) {
-    return bytes > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+    return File::ExceedsTransferLimit(bytes);
 }
 
 static int PosixResult(int result) {
@@ -1269,6 +1268,11 @@ static int CopyIovecs(const KernelIovec* iov, int iovcnt, std::vector<KernelIove
 #else
     throw std::runtime_error("iovec: checked guest copies are not implemented on this host");
 #endif
+    std::size_t total = 0;
+    for (const auto& vector : vectors) {
+        if (vector.length > static_cast<std::size_t>(INT64_MAX) - total) return SceErrorFromErrno(GUEST_EINVAL);
+        total += vector.length;
+    }
     return 0;
 }
 
@@ -1295,6 +1299,7 @@ static void PrepareWriteIovecs(const KernelIovec* iov, int iovcnt) {
 #ifdef _WIN32
 
 int64_t APS5_VABI sceKernelPread(int d, void* buf, size_t nbytes, int64_t offset) {
+    if (ExceedsTransferLimit(nbytes)) return SceErrorFromErrno(GUEST_EINVAL);
     if (const int error = PositionedArgumentError(d, buf == nullptr && nbytes != 0, offset)) return SceErrorFromErrno(error);
     if (const auto error = PositionedGuestSocketError(d); error != 0) return error;
     const GuestArena::HostWrite destination(buf, nbytes);
@@ -1307,6 +1312,7 @@ int64_t APS5_VABI sceKernelPread(int d, void* buf, size_t nbytes, int64_t offset
 }
 
 int64_t APS5_VABI sceKernelPwrite(int d, const void* buf, size_t nbytes, int64_t offset) {
+    if (ExceedsTransferLimit(nbytes)) return SceErrorFromErrno(GUEST_EINVAL);
     if (const int error = PositionedArgumentError(d, buf == nullptr && nbytes != 0, offset)) return SceErrorFromErrno(error);
     if (const auto error = PositionedGuestSocketError(d); error != 0) return error;
     GuestArena::GuestArenaPrepareHostRead_nid_no_patch(buf, nbytes);
@@ -1323,7 +1329,6 @@ static std::int64_t TransferIovecs(int d, const KernelIovec* guestIov, int iovcn
     std::size_t total = 0;
     for (int i = 0; i < iovcnt; ++i) {
         if (iov[i].base == nullptr && iov[i].length != 0) return SceErrorFromErrno(GUEST_EFAULT);
-        if (iov[i].length > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()) - total) return SceErrorFromErrno(GUEST_EINVAL);
         total += iov[i].length;
     }
     if (offset != nullptr && total > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max() - *offset)) return SceErrorFromErrno(GUEST_EINVAL);
@@ -1353,6 +1358,7 @@ static std::int64_t TransferIovecs(int d, const KernelIovec* guestIov, int iovcn
         std::vector<char> gathered;
         gathered.reserve(total);
         for (int i = 0; i < iovcnt; ++i) {
+            if (iov[i].length == 0) continue;
             const auto* base = static_cast<const char*>(iov[i].base);
             gathered.insert(gathered.end(), base, base + iov[i].length);
         }
@@ -1394,6 +1400,7 @@ int64_t APS5_VABI sceKernelPwritev(int d, const KernelIovec* iov, int iovcnt, in
 #else
 
 int64_t APS5_VABI sceKernelPread(int d, void* buf, size_t nbytes, int64_t offset) {
+    if (ExceedsTransferLimit(nbytes)) return SceErrorFromErrno(GUEST_EINVAL);
     if (const int error = PositionedArgumentError(d, buf == nullptr && nbytes != 0, offset)) return SceErrorFromErrno(error);
     if (const auto error = PositionedGuestSocketError(d); error != 0) return error;
     const GuestArena::HostWrite destination(buf, nbytes);
@@ -1405,6 +1412,7 @@ int64_t APS5_VABI sceKernelPread(int d, void* buf, size_t nbytes, int64_t offset
 }
 
 int64_t APS5_VABI sceKernelPwrite(int d, const void* buf, size_t nbytes, int64_t offset) {
+    if (ExceedsTransferLimit(nbytes)) return SceErrorFromErrno(GUEST_EINVAL);
     if (const int error = PositionedArgumentError(d, buf == nullptr && nbytes != 0, offset)) return SceErrorFromErrno(error);
     if (const auto error = PositionedGuestSocketError(d); error != 0) return error;
     GuestArena::GuestArenaPrepareHostRead_nid_no_patch(buf, nbytes);
